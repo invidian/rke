@@ -59,6 +59,7 @@ type ExternalFlags struct {
 	ConfigDir        string
 	CustomCerts      bool
 	DisablePortCheck bool
+	EtcdOnly         bool
 	GenerateCSR      bool
 	Local            bool
 	UpdateOnly       bool
@@ -366,5 +367,6 @@ func GetExternalFlags(local, updateOnly, disablePortCheck bool, configDir, clust
 		DisablePortCheck: disablePortCheck,
 		ConfigDir:        configDir,
 		ClusterFilePath:  clusterFilePath,
+		EtcdOnly:         true,
 	}
 }

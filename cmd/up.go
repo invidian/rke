@@ -139,8 +139,11 @@ func ClusterUp(ctx context.Context, dialersOptions hosts.DialersOptions, flags c
 		APIURL = fmt.Sprintf("https://" + kubeCluster.ControlPlaneHosts[0].Address + ":6443")
 	}
 
-	if err := kubeCluster.PrePullK8sImages(ctx); err != nil {
-		return APIURL, caCrt, clientCert, clientKey, nil, err
+	// If we deploy only etcd, don't prepull kubernetes images
+	if !flags.EtcdOnly {
+		if err := kubeCluster.PrePullK8sImages(ctx); err != nil {
+			return APIURL, caCrt, clientCert, clientKey, nil, err
+		}
 	}
 
 	err = kubeCluster.DeployControlPlane(ctx)
@@ -159,22 +162,24 @@ func ClusterUp(ctx context.Context, dialersOptions hosts.DialersOptions, flags c
 		return APIURL, caCrt, clientCert, clientKey, nil, err
 	}
 
-	err = cluster.SaveFullStateToKubernetes(ctx, kubeCluster, clusterState)
-	if err != nil {
-		return APIURL, caCrt, clientCert, clientKey, nil, err
-	}
+	if !flags.EtcdOnly {
+		err = cluster.SaveFullStateToKubernetes(ctx, kubeCluster, clusterState)
+		if err != nil {
+			return APIURL, caCrt, clientCert, clientKey, nil, err
+		}
 
-	err = kubeCluster.DeployWorkerPlane(ctx)
-	if err != nil {
-		return APIURL, caCrt, clientCert, clientKey, nil, err
+		err = kubeCluster.DeployWorkerPlane(ctx)
+		if err != nil {
+			return APIURL, caCrt, clientCert, clientKey, nil, err
+		}
+
+		err = kubeCluster.SyncLabelsAndTaints(ctx, currentCluster)
+		if err != nil {
+			return APIURL, caCrt, clientCert, clientKey, nil, err
+		}
 	}
 
 	if err = kubeCluster.CleanDeadLogs(ctx); err != nil {
-		return APIURL, caCrt, clientCert, clientKey, nil, err
-	}
-
-	err = kubeCluster.SyncLabelsAndTaints(ctx, currentCluster)
-	if err != nil {
 		return APIURL, caCrt, clientCert, clientKey, nil, err
 	}
 
@@ -232,6 +237,15 @@ func clusterUpFromCli(ctx *cli.Context) error {
 	// Custom certificates and certificate dir flags
 	flags.CertificateDir = ctx.String("cert-dir")
 	flags.CustomCerts = ctx.Bool("custom-certs")
+
+	for _, node := range rkeConfig.Nodes {
+		for _, role := range node.Role {
+			if role == "controlplane" {
+				flags.EtcdOnly = false
+			}
+		}
+	}
+
 	if ctx.Bool("init") {
 		return ClusterInit(context.Background(), rkeConfig, hosts.DialersOptions{}, flags)
 	}

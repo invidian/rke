@@ -33,24 +33,31 @@ func ReconcileCluster(ctx context.Context, kubeCluster, currentCluster *Cluster,
 		return nil
 	}
 
-	kubeClient, err := k8s.NewClient(kubeCluster.LocalKubeConfigPath, kubeCluster.K8sWrapTransport)
-	if err != nil {
-		return fmt.Errorf("Failed to initialize new kubernetes client: %v", err)
-	}
-	// sync node labels to define the toDelete labels
-	syncLabels(ctx, currentCluster, kubeCluster)
+	if !flags.EtcdOnly {
+		kubeClient, err := k8s.NewClient(kubeCluster.LocalKubeConfigPath, kubeCluster.K8sWrapTransport)
+		if err != nil {
+			return fmt.Errorf("Failed to initialize new kubernetes client: %v", err)
+		}
+		// sync node labels to define the toDelete labels
+		syncLabels(ctx, currentCluster, kubeCluster)
 
-	if err := reconcileEtcd(ctx, currentCluster, kubeCluster, kubeClient); err != nil {
-		return fmt.Errorf("Failed to reconcile etcd plane: %v", err)
+		if err := reconcileEtcd(ctx, currentCluster, kubeCluster, kubeClient); err != nil {
+			return fmt.Errorf("Failed to reconcile etcd plane: %v", err)
+		}
+
+		if err := reconcileWorker(ctx, currentCluster, kubeCluster, kubeClient); err != nil {
+			return err
+		}
+
+		if err := reconcileControl(ctx, currentCluster, kubeCluster, kubeClient); err != nil {
+			return err
+		}
+	} else {
+		if err := reconcileEtcd(ctx, currentCluster, kubeCluster, nil); err != nil {
+			return fmt.Errorf("Failed to reconcile etcd plane: %v", err)
+		}
 	}
 
-	if err := reconcileWorker(ctx, currentCluster, kubeCluster, kubeClient); err != nil {
-		return err
-	}
-
-	if err := reconcileControl(ctx, currentCluster, kubeCluster, kubeClient); err != nil {
-		return err
-	}
 	if kubeCluster.ForceDeployCerts {
 		if err := restartComponentsWhenCertChanges(ctx, currentCluster, kubeCluster); err != nil {
 			return err
@@ -181,9 +188,11 @@ func reconcileEtcd(ctx context.Context, currentCluster, kubeCluster *Cluster, ku
 			log.Warnf(ctx, "[reconcile] %v", err)
 			continue
 		}
-		if err := hosts.DeleteNode(ctx, etcdHost, kubeClient, etcdHost.IsControl || etcdHost.IsWorker, kubeCluster.CloudProvider.Name); err != nil {
-			log.Warnf(ctx, "Failed to delete etcd node [%s] from cluster: %v", etcdHost.Address, err)
-			continue
+		if kubeClient != nil {
+			if err := hosts.DeleteNode(ctx, etcdHost, kubeClient, etcdHost.IsControl || etcdHost.IsWorker, kubeCluster.CloudProvider.Name); err != nil {
+				log.Warnf(ctx, "Failed to delete etcd node [%s] from cluster: %v", etcdHost.Address, err)
+				continue
+			}
 		}
 		// attempting to clean services/files on the host
 		if err := reconcileHost(ctx, etcdHost, false, true, currentCluster.SystemImages.Alpine, currentCluster.DockerDialerFactory, currentCluster.PrivateRegistriesMap, currentCluster.PrefixPath, currentCluster.Version); err != nil {
